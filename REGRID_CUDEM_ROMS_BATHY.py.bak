@@ -1,0 +1,224 @@
+"""
+REGRID_CUDEM_ROMS_BATHY
+
+Download CUDEM data from http site and regrid to a given ROMS grid. 
+
+"""
+
+
+#Import Necessary Modules
+import xarray as xr
+import dask as da
+import pandas as pd
+import numpy as np
+import requests
+import time,os,shutil
+import rioxarray
+import shapefile
+import matplotlib.pyplot as plt
+from shapely import geometry
+import cartopy.io.shapereader as shpreader
+import netCDF4
+import hvplot.xarray
+import cmocean.cm as cmo
+import xcmocean
+import xesmf as xe
+from rioxarray import merge
+
+
+#Dask Initialize
+#from dask.distributed import Client
+#import dask.array as da
+#client = Client()
+
+
+# INPUT GRID FILE OPTIONS
+gfile=r'/home/hunter/roms/NOPP/DEM/SANIBEL_ROMS_FORECAST_11R_JUN2021_MAX3.nc'
+newgfile=r'/home/hunter/roms/NOPP/DEM/SANIBEL_ROMS_FORECAST_11R_JUN2021_MAX3_CUDEM.nc'
+
+gfile=r'/home/hunter/roms/NOPP/grids/michael_grd3.nc'
+newgfile=r'//home/hunter/roms/NOPP/grids/michael_grd3_CUDEM.nc'
+
+
+shpfile_9=r'/home/hunter/roms/NOPP/DEM/tileindex_NCEI_ninth_Topobathy_2014/tileindex_NCEI_ninth_Topobathy_2014.shp'
+datadir_9=r'/home/hunter/roms/NOPP/DEM/ncei_nintharcsec_dem_data/'
+urlprefix_9=r'https://chs.coast.noaa.gov/htdata/raster2/elevation/NCEI_ninth_Topobathy_2014_8483/'
+
+shpfile_3=r'/home/hunter/roms/NOPP/DEM/tileindex_NCEI_third_Topobathy_2014/tileindex_NCEI_third_Topobathy_2014.shp'
+datadir_3=r'/home/hunter/roms/NOPP/DEM/ncei_thirdarcsec_dem_data/'
+urlprefix_3=r'https://coast.noaa.gov/htdata/raster2/elevation/NCEI_third_Topobathy_2014_8580/'
+
+depthcut=-3.0
+
+#Extract Grid Information
+grd = xr.open_dataset(gfile,chunks={'eta_rho':900,'xi_rho':600}) 
+grd=grd.set_coords(('lat_rho','lon_rho'))
+grdH=grd.h.load()
+grdH = grdH.rename({"lon_rho": "lon", "lat_rho": "lat"})
+
+glon=np.concatenate((grdH.lon[0,:].values,grdH.lon[:,-1].values,np.flip(grdH.lon[-1,:].values),np.flip(grdH.lon[:,0].values)))  
+glat=np.concatenate((grdH.lat[0,:].values,grdH.lat[:,-1].values,np.flip(grdH.lat[-1,:].values),np.flip(grdH.lat[:,0].values)))  
+llbounds=d = np.column_stack((glon,glat))
+
+#create new Gridfile
+shutil.copy(gfile,newgfile)
+
+
+
+# Get CUDEM 9th arc-sec data from coast.noaa.gov 
+
+BBOX=geometry.Polygon(llbounds)
+a=shpreader.Reader(shpfile_9)
+b=a.records()
+GLIST9=[]
+flist9=[]
+for c in b:
+    tgeom=c.geometry
+ #   print(tgeom)
+ #   print(c.attributes['location'])
+    if tgeom.intersects(BBOX):
+        GLIST9.append(tgeom)
+        location=c.attributes['location']
+      #  print(location)
+      #  flist.append(location)
+        tmp=location.split('/')
+        image_url=urlprefix_9+location
+        print(image_url)
+        outfile=datadir_9+tmp[-1]
+        flist9.append(outfile)
+        
+        if os.path.exists(flist9[-1]):
+            print('FILE EXISTS SKIPPING:'+outfile)
+            continue
+            
+        print('Getting:'+image_url)
+        r = requests.get(image_url)
+        if r.status_code==404:
+            print('FILE NOT FOUND: ' + image_url)
+        
+        
+        print('Writing:'+tmp[-1])
+        
+        with open(outfile,'wb') as f:
+            f.write(r.content)
+            
+            
+elements9 = []
+
+for file in flist9:
+    print(file)
+    tmp=rioxarray.open_rasterio(file)
+    tmp=tmp.squeeze() 
+    elements9.append(tmp)
+
+
+# Get CUDEM 3th arc-sec data from coast.noaa.gov 
+
+BBOX=geometry.Polygon(llbounds)
+a=shpreader.Reader(shpfile_3)
+b=a.records()
+GLIST3=[]
+flist3=[]
+for c in b:
+    tgeom=c.geometry
+ #   print(tgeom)
+ #   print(c.attributes['location'])
+    if tgeom.intersects(BBOX):
+        GLIST3.append(tgeom)
+        location=c.attributes['location']
+      #  print(location)
+      #  flist.append(location)
+        tmp=location.split('/')
+        image_url=urlprefix_3+location
+        print(image_url)
+        outfile=datadir_3+tmp[-1]
+        flist3.append(outfile)
+        
+        if os.path.exists(flist3[-1]):
+            print('FILE EXISTS SKIPPING:'+outfile)
+            continue
+            
+        print('Getting:'+image_url)
+        r = requests.get(image_url)
+        if r.status_code==404:
+            print('FILE NOT FOUND: ' + image_url)
+        
+        
+        print('Writing:'+tmp[-1])
+        
+        with open(outfile,'wb') as f:
+            f.write(r.content)
+            
+            
+elements3 = []
+
+for file in flist3:
+    print(file)
+    tmp=rioxarray.open_rasterio(file)
+    tmp=tmp.squeeze() 
+    elements3.append(tmp)
+
+
+
+
+df=grdH.to_dataframe()
+
+for el in elements9:
+  #   print(el)
+    st = time.time()
+    el = el.rename({"x": "lon", "y": "lat"})
+    mnlon=el.lon.min().values
+    mxlon=el.lon.max().values
+    mnlat=el.lat.min().values
+    mxlat=el.lat.max().values
+    #print([mnlon, mxlon, mnlat, mxlat])
+
+    df2=df.loc[(df['lon'] > mnlon) & (df['lon'] < mxlon) & (df['lat'] > mnlat) & (df['lat'] < mxlat)]
+    print('Regridding')
+    regridder = xe.Regridder(el, df2, "bilinear", locstream_out=True)
+
+
+    y=regridder(el, keep_attrs=True)
+
+    df.loc[(df['lon'] > mnlon) & (df['lon'] < mxlon) & (df['lat'] > mnlat) & (df['lat'] < mxlat),'h']=-y
+#    get the end time
+    et = time.time()
+    # get the execution time
+    elapsed_time = et - st
+    print('Execution time:', elapsed_time, 'seconds')
+
+
+
+for el in elements3:
+ #   print(el)
+    st = time.time()
+    el = el.rename({"x": "lon", "y": "lat"})
+    mnlon=el.lon.min().values
+    mxlon=el.lon.max().values
+    mnlat=el.lat.min().values
+    mxlat=el.lat.max().values
+    #print([mnlon, mxlon, mnlat, mxlat])
+
+    df2=df.loc[(df['lon'] > mnlon) & (df['lon'] < mxlon) & (df['lat'] > mnlat) & (df['lat'] < mxlat)]
+    print('Regridding')
+    regridder = xe.Regridder(el, df2, "bilinear", locstream_out=True)
+
+
+    y=regridder(el, keep_attrs=True)
+
+    df.loc[(df['lon'] > mnlon) & (df['lon'] < mxlon) & (df['lat'] > mnlat) & (df['lat'] < mxlat),'h']=-y
+    # get the end time
+    et = time.time()
+    # get the execution time
+    elapsed_time = et - st
+    print('Execution time:', elapsed_time, 'seconds')
+newH=df.to_xarray()
+newH=newH.set_coords(('lat','lon'))
+tmpH=newH['h'].values
+tmpH[tmpH<depthcut]=depthcut
+#wrtiting data put. 
+nc = netCDF4.Dataset(newgfile, "r+", format="NETCDF4")
+h=nc['h']
+h[:,:]=tmpH
+nc.close()
+
