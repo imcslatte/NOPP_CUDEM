@@ -218,7 +218,7 @@ def main():
             image_url=c.attributes['url']
             print(image_url)
             #outfile=datadir_3+tmp[-1]
-            outfile=datadir_9+location
+            outfile=datadir_3+location
             flist3.append(outfile)
             
             if os.path.exists(flist3[-1]):
